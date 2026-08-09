@@ -1,73 +1,52 @@
-name: Fetch and Update Files
+name: Update rule sets
 
 on:
   schedule:
-    - cron: '0 * * * *' # Runs every hour
-  workflow_dispatch: # Allows manual triggering of the workflow
+    - cron: "0 * * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/main.yml
+      - scripts/update-rule-sets.sh
+
 permissions:
   contents: write
+
+concurrency:
+  group: rule-set-${{ github.event_name }}
+  cancel-in-progress: true
+
 jobs:
-  fetch-and-update:
+  update:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v2
-      with:
-        ref: rule-set 
+      - name: Checkout generator
+        uses: actions/checkout@v4
 
-    - name: Fetch and update files
-      run: |
-        # Define the URLs and the corresponding file paths
-        declare -A links
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geoip-phishing.srs"]="block/geoip-phishing.srs"
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geoip-malware.srs"]="block/geoip-malware.srs"
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geosite-phishing.srs"]="block/geosite-phishing.srs"
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geosite-malware.srs"]="block/geosite-malware.srs"
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geosite-cryptominers.srs"]="block/geosite-cryptominers.srs"
-        
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geosite-category-ads-all.srs"]="block/geosite-category-ads-all.srs"
-        
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geoip-ir.srs"]="country/geoip-ir.srs"
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geoip-cn.srs"]="country/geoip-cn.srs"
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geoip-af.srs"]="country/geoip-af.srs"
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geoip-ru.srs"]="country/geoip-ru.srs"
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geoip-id.srs"]="country/geoip-id.srs"
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geoip-tr.srs"]="country/geoip-tr.srs"
+      - name: Checkout published rule sets
+        uses: actions/checkout@v4
+        with:
+          ref: rule-set
+          path: output
 
-        #links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geosite-af.srs"]="country/geosite-af.srs"
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geosite-ir.srs"]="country/geosite-ir.srs"
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geosite-cn.srs"]="country/geosite-cn.srs"
-        #links["https://github.com/savely-krasovsky/antizapret-sing-box/releases/latest/download/antizapret.srs"]="country/geosite-ru-blocked.srs"
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geosite-category-ru.srs"]="country/geosite-ru.srs"
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geosite-category-gov-ru.srs?"]="country/geosite-id.srs"
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geosite-category-gov-ru.srs??"]="country/geosite-tr.srs"
+      - name: Fetch, convert, and validate rule sets
+        run: ./scripts/update-rule-sets.sh output
 
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geoip-br.srs"]="country/geoip-br.srs"
-        links["https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geosite-ir.srs?"]="country/geosite-br.srs"
-        
-        for url in "${!links[@]}"; do
-          file_path=${links[$url]}
-          mkdir -p "$(dirname "$file_path")"
-          temp_file=$(mktemp)
-          
-          # Fetch the content and save it to a temporary file
-          if curl -s -f -L "$url" -o "$temp_file"; then
-            mv "$temp_file" "$file_path"
-            echo "Successfully fetched $url to $file_path"
-          else
-            echo "Failed to fetch $url ($file_path)"
-            rm -f "$temp_file"
-          fi
-        done
-        cp country/geosite-ir.srs country/geosite-af.srs
+      - name: Upload MRS validation artifacts
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mihomo-rule-sets
+          path: output/**/*.mrs
 
-    - name: Commit and push changes
-      run: |
-        git config --global user.name 'github-actions[bot]'
-        git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
-        git add .
-        git commit -m "Update files from fetched links" || echo "No changes to commit"
-        git push origin HEAD:rule-set --force
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Commit and push changes
+        if: github.event_name != 'pull_request'
+        working-directory: output
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add block country
+          git diff --cached --quiet && exit 0
+          git commit -m "Update SRS and MRS rule sets"
+          git push origin HEAD:rule-set
